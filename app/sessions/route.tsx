@@ -13,17 +13,59 @@ export function parseSession(result?: [number, number, bigint] | readonly [numbe
   }
 }
 
+// Create a new session
+export async function POST(req: Request) {
+  try {
+    const body = await req.json();
+    const { start, end } = body;
+
+    if (!start || !end) {
+      return NextResponse.json({ error: 'Missing start or end time' }, { status: 400 });
+    }
+    
+    // Instantiate account using private key
+    const privateKey = process.env.PRIVATE_KEY
+    const account = privateKeyToAccount(privateKey as Hex)
+
+    // Instantiate client that can use wallet to send transactions
+    const walletClient = createWalletClient({
+        account,
+        chain: baseSepolia,
+        transport: http()
+      })
+
+    // Send a transaction to create a new session
+    // Writes Attendance.createSession(start, end)
+    const transactionHash = await walletClient.sendTransaction({
+      to: attendenceContract,
+      data: encodeFunctionData({
+        abi: AttendanceAbi,
+        functionName: "createSession",
+        args: [start, end]
+      })
+    })
+
+    return NextResponse.json({ transactionHash }, { status: 200 });
+  } catch (error) {
+    return NextResponse.json({ error: 'Invalid request', message: (error as Error).message }, { status: 400 });
+  }
+}
+
+// Get all sessions created by the contract
 export async function GET(req: Request) {
   const PAGE_SIZE = 50
   try {
     const { searchParams } = new URL(req.url);
     const startId = parseInt(searchParams.get('startId') ?? "0");
 
+    // Instantiate client to interact with the blockchain
     const publicClient = createPublicClient({
       chain: baseSepolia,
       transport: http()
     })
 
+    // Get the total number of sessions created by the contract
+    // Reads Attendance.totalSessions()
     const totalSessionsRes = await publicClient.readContract({
       address: attendenceContract,
       abi: AttendanceAbi,
@@ -36,7 +78,9 @@ export async function GET(req: Request) {
 
     const endId = totalSessions - startId > PAGE_SIZE ? startId + PAGE_SIZE : totalSessions - 1
     const sessionIds = Array.from({ length: endId - startId + 1 }, (_, i) => startId + i);
-    console.log({sessionIds})
+    
+    // Get the session data for each session id
+    // Reads Attendance.sessions(id) through a multicall contract (https://www.multicall3.com/)
     const sessionsRes = await publicClient.multicall({
       contracts: sessionIds.map(sessionId => ({
         abi: AttendanceAbi, 
@@ -51,31 +95,6 @@ export async function GET(req: Request) {
     }))
 
     return NextResponse.json({totalSessions: parseInt(totalSessions.toString()), sessions}, { status: 200 });
-  } catch (error) {
-    return NextResponse.json({ error: 'Invalid request', message: (error as Error).message }, { status: 400 });
-  }
-}
-
-export async function POST(req: Request) {
-  try {
-    const body = await req.json();
-    const { start, end } = body;
-
-    if (!start || !end) {
-      return NextResponse.json({ error: 'Missing start or end time' }, { status: 400 });
-    }
-
-    const privateKey = process.env.PRIVATE_KEY
-    const account = privateKeyToAccount(privateKey as Hex)
-    const walletClient = createWalletClient({
-        account,
-        chain: baseSepolia,
-        transport: http()
-      })
-
-    const transactionHash = await walletClient.sendTransaction({to: attendenceContract, data: encodeFunctionData({abi: AttendanceAbi, functionName: "createSession", args: [start, end]})})
-
-    return NextResponse.json({ transactionHash }, { status: 200 });
   } catch (error) {
     return NextResponse.json({ error: 'Invalid request', message: (error as Error).message }, { status: 400 });
   }
